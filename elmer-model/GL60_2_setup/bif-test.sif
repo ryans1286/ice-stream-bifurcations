@@ -1,0 +1,875 @@
+
+echo off
+check keywords warn
+
+$namerun = "gl_testmass_twothirds_60_l8_64e3_2"
+
+$yearinsec = 365.25*24*60*60
+
+$Rho = 9.03760022565934E-019   !  Ice - 900.0  kg/m3
+$g = 9.76960357522560E015 !9.81 * yearinsec^2
+
+$SL = 0.0
+
+!array([0.00165   , 0.00217425, 0.00286507, 0.00377539, 0.00497494,
+!       0.00655562, 0.00863852, 0.01138323, 0.015     ])
+
+$rslip=5e-3
+$lslip=8.64e-3
+$mslip=5e-2
+
+$base_lslip=1e-5
+$base_rslip=1e-5
+$base_mslip=1e-5
+$outfolder="./OutputGL/"
+
+$latdist=250.0
+
+Header
+  Mesh DB "." "yshape_gl_twothirds_final_60"
+  Include Path "include"
+  Results Directory "./ResultsGL/"
+End
+
+Constants
+  Rho = Real $Rho
+  g = Real $g
+  Water Density = Real $Rho
+  Buoyancy Use Basal Melt = Logical False
+  Bottom Surface Name = String "Zs Bottom"
+End
+
+Simulation
+  Coordinate System = "Cartesian 3D"
+  Simulation Type = Transient
+  
+  Timestepping Method = "bdf"
+  BDF Order = 1
+
+  Timestep Intervals(1) = 250
+  Output Intervals(1) = 5
+  Timestep Sizes(1) = Real $1.0/10.0 !day step
+
+  Initialize Dirichlet Conditions = Logical False !<- important, FrontExtent...
+  Restart Position = 0
+  Restart File = "loadsurface_gl_twothirds_60.result"
+  Restart Time = 0.0
+  Restart Before Initial Conditions = Logical True !because need beta
+
+  Steady State Max Iterations = 1
+  Steady State Min Iterations = 1
+  Set Dirichlet BCs By BC Numbering = Logical True
+  
+  max output level = 5
+  
+  !Output Intervals = 1
+  Output File = "$namerun".result"
+  Output Coordinates = Logical True
+
+  Extruded Mesh Levels = Integer 10
+  Remesh Extruded Mesh Levels = Integer 10
+  Stabilization Use Longest Element Edge = Logical True
+End
+
+Body 1
+  name = All
+  Equation = 1
+  Material = 1
+  Body force = 1
+  Initial Condition = 1
+End
+
+Body 2
+  name = bed
+  Equation = 2
+  Material = 1
+  Body force = 2
+  Initial Condition = 2
+End
+
+Body 3
+  name = "free surface"
+  Equation = 3
+  Body Force = 3
+  Material = 1
+  Initial Condition = 3
+End
+
+Material 1
+
+  Density = Real $ Rho
+!----------------
+! viscosity stuff
+!----------------
+  Viscosity Model = String "Glen"
+! Viscosity has to be set to a dummy value
+! to avoid warning output from Elmer
+  Viscosity = Real $1.0E13*yearinsec*1.0E-6
+  Glen Exponent = Real 3.0
+! Rate factors (Paterson value in MPa^-3a^-1)
+  Rate Factor 1 = Real 1.258e13
+  Rate Factor 2 = Real 6.046e28
+! these are in SI units - no problem, as long as
+! the gas constant also is
+  Activation Energy 1 = Real 60e3
+  Activation Energy 2 = Real 139e3
+  Glen Enhancement Factor = Real 1.0
+
+! the temperature to switch between the
+! two regimes in the flow law
+  Limit Temperature = Real -10.0
+! In case there is no temperature variable
+  Constant Temperature = Real -20.0
+  Critical Shear Rate = Real 1.0E-10
+
+  Cauchy = Logical True
+  Youngs Modulus = Real 1.0
+  Poisson Ratio = Real 0.3
+
+  Min Zs Top = Variable Coordinate 3, Elevation
+      Real MATC "tx(0) - tx(1) + 10.0"
+
+  Min Zs Bottom = Equals Bed
+  Sea level = Real -820.0
+End
+
+!!!!! SOLVERS
+
+Solver 1
+  Equation = "MapCoordinate"
+  Procedure = "StructuredMeshMapper" "StructuredMeshMapper"
+  Exec Solver = "Before Simulation" !If we restart from Output Coordinates = True, don't need this
+  Active Coordinate = Integer 3
+  Mesh Velocity First Zero = Logical True
+  Recompute Stabilization = Logical True
+End
+
+Solver 2
+  Equation = "Friction"
+  Procedure = "BedRoutines" "CreateFriction"
+  Exec Solver = "Before Simulation"
+
+  Variable = "Friction"
+
+  Main Trunk Slope = Real $1.0/20.0
+  Second Trunk Slope = Real $1.0/20.0
+  Main Trunk Width = Real 3000.0
+  z0 = Real -500.0
+  Second trunk flat distance = Real 2500.0
+
+  Left Channel Left Name = String "LL Mask"
+  Left Channel Right Name = String "LR Mask"
+  Left Channel Front Name = String "LFront Mask"
+
+  Right Channel Left Name = String "RL Mask"
+  Right Channel Right Name = String "RR Mask"
+  Right Channel Front Name = String "RFront Mask"
+
+  Left Channel Friction = Real $base_lslip
+  Right Channel Friction = Real $base_rslip
+  Main Channel Friction = Real $base_mslip
+
+End
+
+Solver 3
+  Equation = "Depth"
+  Exec Solver = "Before TimeStep"
+
+  Procedure = File "ElmerIceSolvers" "FlowDepthSolver"
+  Variable = String "Depth"
+  Variable DOFs = 1
+
+  Gradient = Real -1.0E00
+
+  Calc Free Surface = Logical False
+
+  Linear System Solver = Iterative
+  Linear System Max Iterations = 300
+  Linear System Iterative Method = "BiCGStab"
+  Linear System Preconditioning = ILU0
+  Linear System Convergence Tolerance = Real 1.0E-6
+  Linear System Abort Not Converged = False
+  Linear System Residual Output = 1
+End
+
+Solver 4
+  Equation = "Elevation"
+  Exec Solver = "After TimeStep"
+  !Exec Solver = "Never"
+
+
+  Procedure = File "ElmerIceSolvers" "FlowDepthSolver"
+  Variable = String "Elevation"
+  Variable DOFs = 1
+
+  Gradient = Real 1.0E00
+
+  Linear System Solver = Iterative
+  Linear System Max Iterations = 300
+  Linear System Iterative Method = "BiCGStab"
+  Linear System Preconditioning = ILU0
+  Linear System Convergence Tolerance = Real 1.0E-6
+  Linear System Abort Not Converged = False
+  Linear System Residual Output = 0
+End
+
+Solver 5
+  Equation = "Navier-Stokes"
+  Stabilize = Logical True
+  Solver Timing = Logical True
+
+  Flow Model = Stokes
+  Variable = Flow Solution[Velocity:3 Pressure:1]
+  !mandatory to save bulk stiffness matrix
+  Calculate Loads = Logical True
+
+  Linear System Solver = "Iterative"
+  Linear System Iterative Method = "GCR"
+  BiCGStabl Polynomial Degree = 4
+  Linear System Max Iterations = 500
+  Linear System Convergence Tolerance = Real 1.0E-6
+  Linear System Abort Not Converged = False
+  Linear System Preconditioning = "ILU2"
+  Linear System Residual Output = 0
+
+  Nonlinear System Max Iterations = 100
+  Nonlinear System Convergence Tolerance = 1.0E-5
+  Nonlinear System Newton After Iterations = 100
+  Nonlinear System Newton After Tolerance = 1.0E-6 !never
+  Nonlinear System Newton Max Tolerance = Real 1.0e-2
+  Nonlinear System Newton Max Iterations = Integer 15 !Give up newton
+  Nonlinear System Reset Newton = Logical True
+
+  Steady State Convergence Tolerance = Real 1.0e-12
+
+  Update Exported Variables = Logical True
+  Nonlinear Update Exported Variables = Logical True
+
+  Exported Variable 1 = Flow Solution Loads[Fx:1 Fy:1 Fz:1 CEQ Residual:1]
+  Calculate Loads = Logical True
+End
+
+Solver 6
+  Equation = String "StressSolver"
+  Procedure =  File "ElmerIceSolvers" "ComputeDevStress"
+  Solver Timing = Logical True
+
+  ! this is just a dummy, hence no output is needed
+  !-----------------------------------------------------------------------
+  Variable = -nooutput "Sij"
+  Variable DOFs = 1
+  ! the name of the variable containing the flow solution(U,V,W,Pressure)
+  !-----------------------------------------------------------------------
+  Stress Variable Name = String "Stress"
+  Flow Solver Name = String "Flow Solution"
+  Exported Variable 1 = "Stress" ! [Sxx, Syy, Szz, Sxy] in 2D
+				 ! [Sxx, Syy, Szz, Sxy, Syz, Szx] in 3D
+  Exported Variable 1 DOFs = 6   ! 4 in 2D, 6 in 3D
+  Linear System Solver = "Iterative"
+  Linear System Iterative Method = "BiCGStab"
+  Linear System Max Iterations = 300
+  Linear System Convergence Tolerance = 1.0E-9
+  Linear System Abort Not Converged = False
+  Linear System Preconditioning = "ILU0"
+  Linear System Residual Output = 0
+End
+
+Solver 7
+   Equation = "Normal vector"
+   Variable = "Normal Vector[normal:3]"
+   Exec Solver = Before Timestep
+   ! in 3dimensional simulations we have 3 entries
+   Variable DOFs = 3
+   !NB: does not need to actually solve a matrix
+   !    hence no BW optimization needed
+   Optimize Bandwidth = Logical False
+   Procedure = File "ElmerIceSolvers" "ComputeNormalSolver"
+   ! if set to True, all boundary normals would be computed by default
+   ComputeAll = Logical False
+End
+
+Solver 8
+  Equation = Distance
+  Exec Solver = "Before Timestep"
+  Procedure = "DistanceSolve" "DistanceSolver1"
+  Variable = "Distance"
+  Solver Timing = Logical True
+
+  Nonlinear System Max Iterations = 200
+  Nonlinear System Convergence Tolerance = 1.0e-5
+
+  Linear System Solver = Iterative
+  Steady State Convergence Tolerance = 1.0e-4
+End
+
+Solver 9
+  Equation = "Free Surface Top"
+  Variable = "Zs Top"
+  Exec Solver = "After Timestep"
+  !Exec Solver = "never"
+  Variable DOFs =  1
+  Procedure =  "FreeSurfaceSolver" "FreeSurfaceSolver"
+  Solver Timing = Logical True
+
+!  Before Linsolve = "EliminateDirichlet" "EliminateDirichlet"
+
+  Linear System Solver = Iterative
+  Linear System Max Iterations = 1500
+  Linear System Iterative Method = BiCGStab
+  Linear System Preconditioning = ILU4
+  Linear System Convergence Tolerance = Real 1.0e-12
+  Linear System Abort Not Converged = False
+  Linear System Residual Output = 0
+
+  Nonlinear System Max Iterations = 100
+  Nonlinear System Min Iterations = 2 !needed for dirichlet min fs condition
+  Nonlinear System Convergence Tolerance  = 1.0e-6
+
+  Steady State Convergence Tolerance = 1.0e-03
+
+  Stabilization Method = Bubbles
+  Apply Dirichlet = Logical True
+
+  ALE Formulation = Logical True
+  Maximum Displacement = Real 20.0
+
+  Exported Variable 1 = "Zs Top Residual"
+  Exported Variable 1 DOFs = 1
+  Exported Variable 2 = "Reference Zs Top"
+  Exported Variable 2 DOFs = 1
+  Exported Variable 3 = Zs Top Accumulation Flux
+  Exported Variable 3 DOFs = 3
+  Exported Variable 4 = "smb"
+
+  Update Exported Variables = Logical True
+  Nonlinear Update Exported Variables = Logical True
+  Calculate Loads = Logical True
+End
+
+Solver 10
+  Equation = "Free Surface Bottom"
+  Variable = "Zs Bottom"
+  Exec Solver = "After Timestep"
+  !Exec Solver = "never"
+  Variable DOFs =  1
+  Procedure =  "FreeSurfaceSolver" "FreeSurfaceSolver"
+  Solver Timing = Logical True
+
+!  Before Linsolve = "EliminateDirichlet" "EliminateDirichlet"
+
+  Linear System Solver = Iterative
+  Linear System Max Iterations = 1500
+  Linear System Iterative Method = BiCGStab
+  Linear System Preconditioning = ILU4
+  Linear System Convergence Tolerance = Real 1.0e-12
+  Linear System Abort Not Converged = False
+  Linear System Residual Output = 0
+
+  Nonlinear System Max Iterations = 100
+  Nonlinear System Min Iterations = 2 !needed for dirichlet min fs condition
+  Nonlinear System Convergence Tolerance  = 1.0e-6
+
+  Steady State Convergence Tolerance = 1.0e-03
+
+  Stabilization Method = Bubbles
+  Apply Dirichlet = Logical True
+
+  ALE Formulation = Logical True
+
+  Exported Variable 1 = "Zs Bottom Residual"
+  Exported Variable 1 DOFs = 1
+  Exported Variable 2 = "Reference Zs Bottom"
+  Exported Variable 2 DOFs = 1
+  Exported Variable 3 = Zs Bottom Accumulation Flux
+  Exported Variable 3 DOFs = 3
+
+  Update Exported Variables = Logical True
+  Nonlinear Update Exported Variables = Logical True
+  Calculate Loads = Logical True
+End
+
+Solver 11
+  Equation = "Vertical Mesh Update"
+  ! usually, the solver is executed only after the thermo-mechanical
+  ! problem has obtained a solution on the time-level
+  Exec Solver = "After Timestep"
+  Procedure =  File "MeshSolve1" "MeshSolver"
+  Solver Timing = Logical True
+
+  Variable = Vertical Mesh Update
+  Variable DOFs = 3
+  Linear System Solver = Iterative
+  Linear System Iterative Method = BiCGStab
+  Linear System Max Iterations  = 2000
+  Linear System Preconditioning = ILU1
+  Linear System Convergence Tolerance = 1.0e-12
+  Linear System Abort Not Converged = False
+  Nonlinear System Max Iterations = 3
+  Nonlinear System Convergence Tolerance = 1.0e-06
+End
+
+Solver 12
+  Equation = "GetFluxInflow"
+  Procedure = File "BCFlux" "BCFlux"
+  Exec Solver = "After Timestep"
+  !Exec Solver = Never
+
+  Target Boundary = Integer 1
+  Output File Name = File "$outfolder$$namerun"_flux_inflow.txt"
+End
+
+Solver 13
+  Equation = "GetFluxRight"
+  Procedure = File "BCFlux" "BCFlux"
+  Exec Solver = "After Timestep"
+  !Exec Solver = Never
+
+  Target Boundary = Integer 7
+  Output File Name = File "$outfolder$$namerun"_flux_right.txt"
+End
+
+Solver 14
+  Equation = "GetFluxLeft"
+  Procedure = File "BCFlux" "BCFlux"
+  Exec Solver = "After Timestep"
+  !Exec Solver = Never
+
+  Target Boundary = Integer 4
+  Output File Name = File "$outfolder$$namerun"_flux_left.txt"
+End
+
+Solver 15
+  Equation = "Bifurcation"
+  Procedure = "BedRoutines" "GetBifurcation"
+  Exec Solver = "After timestep"
+
+  Internal Boundary Number = Integer 9
+  Main Channel Name = String "Sidewall Mask"
+  Output File Name = File "$outfolder$$namerun"_bifurcation.txt"
+End
+
+Solver 16
+  Equation = "Volume"
+  Procedure = "BedRoutines" "GlacierVolume"
+  Exec Solver = "After timestep"
+  Output File Name = File "$outfolder$$namerun"_volume.txt"
+End
+
+Solver 17
+  Equation = "FrictionLoads"
+  Procedure = "BedRoutines" "DummySolver"
+
+  Variable = "Friction Load"
+
+  Calculate boundary weights = Logical True
+End
+
+Solver 18
+  Exec Solver = after timestep
+  Equation = String SaveLine
+  Procedure = File "SaveData" "SaveLine"
+  Filename = File "line.dat"
+  !Polyline Coordinates(2,3) = 0.0 0.0 0.0 1.0 1.0 1.0
+
+  Variable 1 = Velocity 1
+  Variable 2 = Velocity 2
+  Variable 3 = Velocity 3
+
+  Save Flux = Logical True
+  Flux Variable = String "Velocity 1"
+End
+
+Solver 19
+  Equation = "ResultOutputPostCalve"
+  Procedure = File "ResultOutputSolve3" "ResultOutputSolver"
+  Exec Solver = "After Timestep"
+  Exec Intervals = 5
+  Output File Name  = "$namerun""
+  Vtu Format = logical true
+  Binary Output = True
+  Single Precision = True
+  Save Geometry IDs = True
+End
+
+Solver 20
+  Equation = "NormalVector" 
+  Exec Solver = "Before Simulation"
+  Procedure = "ElmerIceSolvers" "ComputeNormalSolver"
+  Variable = String "Normal Vector" 
+  Variable DOFs = 3
+  Optimize Bandwidth = Logical False 
+  ComputeAll = Logical True
+End
+
+
+!after NS, to be executed ONLY on the BED
+Solver 21
+  Equation = "ForceToStress"
+  Procedure = File "ElmerIceSolvers" "ForceToStress"
+  Variable = String "Friction Heating"
+  Variable DOFs = 1
+  Force Variable Name = String "Friction Load"
+  Linear System Solver = "Iterative"
+  Linear System Iterative Method = "BiCGStab"
+  Linear System Max Iterations = 500
+  Linear System Convergence Tolerance = 1.0E-05
+  Linear System Abort Not Converged = False
+  Linear System Preconditioning = "ILU0"
+  Linear System Residual Output = 1
+End
+
+
+!!!!! EQUATION
+
+Equation 1 !Main body
+   Active Solvers (18) = 1 2 3 4 5 6 7 8 11 12 13 14 15 16 17 18 19 20
+   Convection = Computed
+   Flow Solution Name = String "Flow Solution"
+End
+
+Equation 2 !Bed
+   Active Solvers(2) = 10 21
+   Convection = Computed
+   Flow Solution Name = String "Flow Solution"
+End
+
+Equation 3 !Upper Surface
+   Active Solvers(1) = 9
+   Element = "p:%-"
+   Convection = Computed
+   Flow Solution Name = String "Flow Solution"
+End
+
+!!!!! BOUNDARY CONDITIONS
+
+!!!!! BOUNDARY CONDITIONS
+
+Boundary Condition 1
+  name = "Inflow"
+  Inflow Mask = Logical True
+  Target Boundaries = 9
+
+  Flow Force BC = Logical True
+
+  Normal-Tangential Velocity = Logical True
+  Normal-Tangential Flow Solution = Logical True
+
+  Velocity 1 = Real -175.0
+  Velocity 2 = Real 0.0
+  Velocity 3 = Real 0.0
+
+  Zs Top = Equals Reference Zs Top
+  Zs Bottom = Equals Reference Zs Bottom
+End
+
+Boundary Condition 2
+
+  name = "Sidewall-main"
+  Target Boundaries(2) = 1 8
+  Flow Force BC = Logical True
+
+  Sidewall Mask = Logical True
+
+  Normal-Tangential Velocity = Logical True
+  Normal-Tangential Flow Solution = Logical True
+  Mass Consistent Normals = Logical True
+
+  Velocity 1 = Real 0.0
+
+  Slip Coefficient 2 = Real $mslip
+  Slip Coefficient 3 = Real $mslip
+
+  Zs Bottom = Equals Reference Zs Bottom
+
+  ComputeNormal = Logical True
+  Friction Load = Variable Velocity 1            
+    Real Procedure  "ElmerIceUSF" "getFrictionLoads"
+
+End
+
+Boundary Condition 3
+
+  name = "left-Side-left"
+  Target Boundaries = 2
+  Flow Force BC = Logical True
+  LL Mask = Logical True
+
+  Normal-Tangential Velocity = Logical True
+  Normal-Tangential Flow Solution = Logical True
+  Mass Consistent Normals = Logical True
+
+  Velocity 1 = Real 0.0
+
+  !Slip Coefficient 2 = Real $lslip
+  !Slip Coefficient 3 = Real $lslip
+
+  Slip coefficient 2 = Variable Distance
+    Real MATC "if(tx<latdist){0.0}else{lslip}
+  Slip coefficient 3 = Variable Distance
+    Real MATC "if(tx<latdist){0.0}else{lslip}
+
+  Zs Bottom = Equals Reference Zs Bottom
+
+  ComputeNormal = Logical True
+  Friction Load = Variable Velocity 1            
+    Real Procedure  "ElmerIceUSF" "getFrictionLoads"
+
+End
+
+Boundary Condition 4
+  name = "Outflow-left"
+  Target Boundaries = 3
+  Flow Force BC = Logical True
+  LFront Mask = Logical True
+  !External Pressure = Variable Coordinate 3
+  !   Real Procedure "ElmerIceUSF" "SeaPressure"
+
+  !Compute Sea Pressure = Logical True
+
+  External Pressure = Variable Depth 
+    Real MATC "-1.0*Rho*g*(tx)"
+
+  ComputeNormal = Logical True
+
+  Distance = Real 0.0
+End
+
+Boundary Condition 5
+
+  name = "left-Side-right"
+  Target Boundaries = 4
+  !need to match bc 3 except different mask
+  Flow Force BC = Logical True
+  LR Mask = Logical True
+
+  Normal-Tangential Velocity = Logical True
+  Normal-Tangential Flow Solution = Logical True
+  Mass Consistent Normals = Logical True
+
+  Velocity 1 = Real 0.0
+
+  !Slip Coefficient 2 = Real $lslip
+  !Slip Coefficient 3 = Real $lslip
+
+  Slip coefficient 2 = Variable Distance
+    Real MATC "if(tx<latdist){0.0}else{lslip}
+  Slip coefficient 3 = Variable Distance
+    Real MATC "if(tx<latdist){0.0}else{lslip}
+
+  Zs Bottom = Equals Reference Zs Bottom
+
+  ComputeNormal = Logical True
+  Friction Load = Variable Velocity 1            
+    Real Procedure  "ElmerIceUSF" "getFrictionLoads"
+
+End
+
+Boundary Condition 6
+
+  name = "right-Sidewall-left"
+  RL Mask = Logical True
+  Target Boundaries = 5
+  Flow Force BC = Logical True
+
+  Normal-Tangential Velocity = Logical True
+  Normal-Tangential Flow Solution = Logical True
+  Mass Consistent Normals = Logical True
+
+  Velocity 1 = Real 0.0
+
+  !Slip Coefficient 2 = Real $rslip
+  !Slip Coefficient 3 = Real $rslip
+
+  Slip coefficient 2 = Variable Distance
+    Real MATC "if(tx<latdist){0.0}else{rslip}
+  Slip coefficient 3 = Variable Distance
+    Real MATC "if(tx<latdist){0.0}else{rslip}
+
+  Zs Bottom = Equals Reference Zs Bottom
+
+  ComputeNormal = Logical True
+  Friction Load = Variable Velocity 1            
+    Real Procedure  "ElmerIceUSF" "getFrictionLoads"
+
+End
+
+Boundary Condition 7
+  name = "Outflow-right"
+  Target Boundaries = 6
+  Flow Force BC = Logical True
+  !External Pressure = Variable Coordinate 3
+  !   Real Procedure "ElmerIceUSF" "SeaPressure"
+
+  ComputeNormal = Logical True
+
+  !Compute Sea Pressure = Logical True
+  RFront Mask = Logical True
+  External Pressure = Variable Depth
+    Real MATC "-1.0*Rho*g*(tx)"
+
+  Distance = Real 0.0
+End
+
+Boundary Condition 8
+
+  name = "right-Sidewall-right"
+  ! matches bc 6 except for mask name
+  RR Mask = Logical True
+  Target Boundaries = 7
+  Flow Force BC = Logical True
+
+  Normal-Tangential Velocity = Logical True
+  Normal-Tangential Flow Solution = Logical True
+  Mass Consistent Normals = Logical True
+
+  Velocity 1 = Real 0.0
+
+  !Slip Coefficient 2 = Real $rslip
+  !Slip Coefficient 3 = Real $rslip
+
+  Slip coefficient 2 = Variable Distance
+    Real MATC "if(tx<latdist){0.0}else{rslip}
+  Slip coefficient 3 = Variable Distance
+    Real MATC "if(tx<latdist){0.0}else{rslip}
+
+  Zs Bottom = Equals Reference Zs Bottom
+
+  ComputeNormal = Logical True
+  Friction Load = Variable Velocity 1            
+    Real Procedure  "ElmerIceUSF" "getFrictionLoads"
+
+End
+
+Boundary Condition 9
+  !internal bc
+  Target Boundaries = 10
+
+  BC Mask = Logical True
+End
+
+Boundary Condition 10
+  name = "bottom"
+  Target Boundaries = 11
+  Bottom Surface Mask = Logical True
+
+  !Bottom Surface = Variable Coordinate 1, Coordinate 2
+  !  Real Procedure "bif-bedrockfunction_3D" "initbedrock"
+
+  Bottom Surface = Equals Bed
+
+  Body ID = 2
+
+  Flow Force BC = Logical True
+  Normal-Tangential Velocity = Logical True
+  Mass Consistent Normals = Logical True
+
+  ComputeNormal = Logical True
+
+  !TODO sea spring
+  Velocity 1 = Real 0.0
+  
+  Slip Coefficient 1 = Variable Friction
+    Real MATC "tx"
+  Slip Coefficient 2 = Variable Friction
+    Real MATC "tx"
+
+  !Slip Coefficient 2 = Variable Coordinate 1
+  !  Real Procedure "ElmerIceUSF" "Sliding_Weertman"
+  !Slip Coefficient 3 = Variable Coordinate 1
+  !  Real Procedure "ElmerIceUSF" "Sliding_Weertman"
+  !Test Contact Tolerance = Real 1.0E-3
+
+  Sliding Law = String "Weertman"  ! Alternative is "Coulomb"
+  Weertman Friction Coefficient = Real 1.0e-4
+  Weertman Exponent = Real $(1.0/3.0)
+  Weertman Linear Velocity = Real 1.0
+
+  ! Sliding Law = String "coulomb"
+  ! Friction Law Sliding Coefficient = Real 1.0E5
+  ! Friction Law Post-Peak Exponent = Real 1.0
+  ! Friction Law Maximum Value = Real 1.0
+  ! Friction Law Linear Velocity = Real 0.01
+  ! Friction Law PowerLaw Exponent = Real 3
+
+  ! Sliding Law = String "budd"
+  ! Budd Friction Coefficient = Real 1.0E-5
+  ! Budd Velocity Exponent = Real $1.0/3.0
+  ! Budd Zab Exponent = Real 1.0 !2.0
+  ! Budd Linear Velocity = Real 0.1
+  ! Budd Gravity = Real $g 
+  ! Budd Ocean Density = Real $RhoWS
+  ! Budd Floatation = Logical True
+
+  
+  Vertical Mesh Update 3 = Variable Zs Bottom, Reference Zs Bottom
+    Real MATC "tx(0) - tx(1)"
+
+  
+  !Zs Bottom = Variable Coordinate 1, Coordinate 2
+  !  Real Procedure "bif-bedrockfunction_3D" "initbedrock"
+
+  Elevation = Real 0.0
+
+  Friction Load = Variable Velocity 1            
+    Real Procedure  "ElmerIceUSF" "getFrictionLoads"
+End
+
+Boundary Condition 11
+  name = Surface
+  Top Surface Mask = Logical True
+  Target Boundaries = 12
+
+  !Top Surface = Variable Coordinate 1, Coordinate 2
+  !  Real Procedure "bif-bedrockfunction_3D" "initsurface"
+
+  Top Surface = Equals Surface
+
+  Body ID = 3
+
+  Normal-Tangential Velocity = Logical True
+  Normal-Tangential Flow Solution = Logical True
+
+  Depth = Real 0.0
+  Flow Force BC = Logical True
+
+  Vertical Mesh Update 3 = Variable Zs Top, Reference Zs Top
+    Real MATC "tx(0) - tx(1)"
+End
+
+Body Force 1
+  Flow BodyForce 1 = Real 0.0
+  Flow BodyForce 2 = Real 0.0
+  Flow BodyForce 3 = Real $-g
+
+  Vertical Mesh Update 2 = Real 0.0
+  Vertical Mesh Update 1 = Real 0.0
+End
+
+Body Force 2
+End
+
+Body Force 3
+End
+
+
+Initial Condition 1
+  Depth = Real 0.0
+  Height = Real 0.0
+
+  Pressure = Real 0.0
+  Velocity 1 = Real 0.0
+  Velocity 2 = Real 0.0
+  Velocity 3 = Real 0.0
+End
+
+Initial Condition 2
+  Zs Bottom = Equals Bed
+  Reference Zs Bottom = Equals Bed
+End
+
+Initial Condition 3
+  Zs Top = Equals Surface
+  Reference Zs Top = Equals Surface
+End
+
+
